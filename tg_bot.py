@@ -34,12 +34,14 @@ from db import (
     get_daily_count,
     get_keywords,
     get_proxies,
+    get_x_lists,
     set_keywords,
     set_setting,
+    set_x_lists,
     update_log_status,
 )
 
-(ST_ADD_TOKEN, ST_ADD_CT0, ST_ADD_PROXY, ST_SET_KEYWORDS) = range(4)
+(ST_ADD_TOKEN, ST_ADD_CT0, ST_ADD_PROXY, ST_SET_KEYWORDS, ST_SET_LISTS) = range(5)
 
 import re as _re
 
@@ -133,12 +135,23 @@ async def _show_main_menu(query_or_message, edit: bool = True) -> None:
         running = (
             state.worker_manager.is_running(a["id"]) if state.worker_manager else False
         )
+        sleeping = (
+            state.worker_manager.get_is_sleeping(a["id"]) if state.worker_manager and running else False
+        )
         today = await get_daily_count(a["id"])
         st = await get_all_settings(a["id"])
         auto = st.get("auto_publish", False)
-        icon = "🟢" if running else "🔴"
+        if sleeping:
+            icon = "�"
+            status_text = "спит"
+        elif running:
+            icon = "🟢"
+            status_text = "работает"
+        else:
+            icon = "🔴"
+            status_text = "остановлен"
         pub = "🚀 авто" if auto else "✋ ручной"
-        lines.append(f"{icon} @{a['username']} | {pub} | сегодня: {today}")
+        lines.append(f"{icon} @{a['username']} | {pub} | {status_text} | сегодня: {today}")
     text = (
         "\n".join(lines) if len(lines) > 1 else "🤖 *X AutoReply Bot*\n\nАккаунтов нет."
     )
@@ -314,7 +327,10 @@ async def _show_settings(acc_id: int, query) -> None:
             [
                 InlineKeyboardButton(
                     "🔑 Ключевые слова", callback_data=f"acc:keywords:{acc_id}"
-                )
+                ),
+                InlineKeyboardButton(
+                    "📋 X Списки", callback_data=f"acc:lists:{acc_id}"
+                ),
             ],
             [
                 InlineKeyboardButton(
@@ -638,6 +654,70 @@ async def _kw_save(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     acc = await get_account(acc_id)
     await update.message.reply_text(
         f"✅ {'Raw-запрос' if is_raw else f'{len(words)} слов'} сохранено для @{acc['username']}",
+        reply_markup=InlineKeyboardMarkup(
+            [[InlineKeyboardButton("⚙️ Настройки", callback_data=f"settings:{acc_id}")]]
+        ),
+    )
+    ctx.user_data.clear()
+    return ConversationHandler.END
+
+
+# ─────────────────────────────────────────────
+# X СПИСКИ (LISTS)
+# ─────────────────────────────────────────────
+
+async def _show_lists(acc_id: int, query) -> None:
+    acc = await get_account(acc_id)
+    lists = await get_x_lists(acc_id)
+    lists_text = "\n".join(f"• `{url}`" for url in lists) if lists else "_не заданы_"
+    await query.edit_message_text(
+        f"📋 *X Списки* @{acc['username']}\n\n{lists_text}\n\n"
+        "📌 Формат:\n"
+        "• `https://x.com/i/lists/123456789` — один URL на строку",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(
+            [
+                [InlineKeyboardButton("✏️ Изменить", callback_data=f"lists:edit:{acc_id}")],
+                [InlineKeyboardButton("🔙 Назад", callback_data=f"settings:{acc_id}")],
+            ]
+        ),
+    )
+
+
+async def _lists_edit_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    await query.answer()
+    acc_id = int(query.data.split(":")[2])
+    ctx.user_data["lists_acc_id"] = acc_id
+    acc = await get_account(acc_id)
+    lists = await get_x_lists(acc_id)
+    lists_example = "\n".join(lists) if lists else "https://x.com/i/lists/123456789"
+    await query.edit_message_text(
+        f"✏️ *X Списки* @{acc['username']}\n\n"
+        f"Текущие списки:\n```\n{lists_example}\n```\n\n"
+        f"Отправь списки (один URL на строку):",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton(
+                        "❌ Отмена", callback_data=f"acc:lists:{acc_id}"
+                    )
+                ]
+            ]
+        ),
+    )
+    return ST_SET_LISTS
+
+
+async def _lists_save(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+    acc_id = ctx.user_data.get("lists_acc_id")
+    text = update.message.text.strip()
+    urls = [u.strip() for u in text.splitlines() if u.strip() and u.strip().startswith("http")]
+    await set_x_lists(acc_id, urls)
+    acc = await get_account(acc_id)
+    await update.message.reply_text(
+        f"✅ {len(urls)} списков сохранено для @{acc['username']}",
         reply_markup=InlineKeyboardMarkup(
             [[InlineKeyboardButton("⚙️ Настройки", callback_data=f"settings:{acc_id}")]]
         ),
@@ -1325,31 +1405,45 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
             return
 
         if data.startswith("wake:"):
-            acc_id = int(data.split(":")[1])
-            if state.worker_manager:
+            try:
+                acc_id = int(data.split(":")[1])
+                if not state.worker_manager:
+                    await query.edit_message_text("⚠️ Менеджер не запущен.", reply_markup=_back())
+                    return
+                if not state.worker_manager.is_running(acc_id):
+                    await query.edit_message_text("⚠️ Воркер не запущен. Сначала запустите аккаунт.", reply_markup=_back())
+                    return
                 state.worker_manager.force_wake(acc_id)
                 acc = await get_account(acc_id)
                 await query.edit_message_text(
                     f"🔔 @{acc['username']} разбужен!",
                     reply_markup=_back(),
                 )
-            else:
-                await query.edit_message_text("⚠️ Менеджер не запущен.", reply_markup=_back())
+            except (ValueError, IndexError) as e:
+                logger.warning(f"[TG] wake error: {e}")
+                await query.answer("❌ Ошибка", show_alert=True)
             return
 
         if data.startswith("sleep:"):
-            parts = data.split(":")
-            acc_id = int(parts[1])
-            minutes = int(parts[2]) if len(parts) > 2 else 30
-            if state.worker_manager:
+            try:
+                parts = data.split(":")
+                acc_id = int(parts[1])
+                minutes = int(parts[2]) if len(parts) > 2 else 30
+                if not state.worker_manager:
+                    await query.edit_message_text("⚠️ Менеджер не запущен.", reply_markup=_back())
+                    return
+                if not state.worker_manager.is_running(acc_id):
+                    await query.edit_message_text("⚠️ Воркер не запущен. Сначала запустите аккаунт.", reply_markup=_back())
+                    return
                 state.worker_manager.manual_sleep(acc_id, minutes)
                 acc = await get_account(acc_id)
                 await query.edit_message_text(
                     f"😴 @{acc['username']} усыплён на {minutes} мин.",
                     reply_markup=_back(),
                 )
-            else:
-                await query.edit_message_text("⚠️ Менеджер не запущен.", reply_markup=_back())
+            except (ValueError, IndexError) as e:
+                logger.warning(f"[TG] sleep error: {e}")
+                await query.answer("❌ Ошибка", show_alert=True)
             return
 
         if data.startswith("test:"):
@@ -1391,47 +1485,75 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
             return
 
         if data.startswith("set_delay:"):
-            parts = data.split(":")
-            acc_id = int(parts[1])
-            current = int(parts[2])
-            new_val = current + 300  # +5 minutes
-            if new_val > 3600:
-                new_val = 60  # wrap to 1 minute
-            await set_setting(acc_id, "min_delay", new_val)
-            await _show_settings(acc_id, query)
+            try:
+                parts = data.split(":")
+                if len(parts) < 3:
+                    await query.answer("❌ Ошибка данных", show_alert=True)
+                    return
+                acc_id = int(parts[1])
+                current = int(parts[2])
+                new_val = current + 300  # +5 minutes
+                if new_val > 3600:
+                    new_val = 60  # wrap to 1 minute
+                await set_setting(acc_id, "min_delay", new_val)
+                await _show_settings(acc_id, query)
+            except (ValueError, IndexError) as e:
+                logger.warning(f"[TG] set_delay error: {e}")
+                await query.answer("❌ Ошибка", show_alert=True)
             return
 
         if data.startswith("set_start:"):
-            parts = data.split(":")
-            acc_id = int(parts[1])
-            current = int(parts[2])
-            new_val = current + 1
-            if new_val > 23:
-                new_val = 0
-            await set_setting(acc_id, "active_hours_start", new_val)
-            await _show_settings(acc_id, query)
+            try:
+                parts = data.split(":")
+                if len(parts) < 3:
+                    await query.answer("❌ Ошибка данных", show_alert=True)
+                    return
+                acc_id = int(parts[1])
+                current = int(parts[2])
+                new_val = current + 1
+                if new_val > 23:
+                    new_val = 0
+                await set_setting(acc_id, "active_hours_start", new_val)
+                await _show_settings(acc_id, query)
+            except (ValueError, IndexError) as e:
+                logger.warning(f"[TG] set_start error: {e}")
+                await query.answer("❌ Ошибка", show_alert=True)
             return
 
         if data.startswith("set_end:"):
-            parts = data.split(":")
-            acc_id = int(parts[1])
-            current = int(parts[2])
-            new_val = current + 1
-            if new_val > 23:
-                new_val = 0
-            await set_setting(acc_id, "active_hours_end", new_val)
-            await _show_settings(acc_id, query)
+            try:
+                parts = data.split(":")
+                if len(parts) < 3:
+                    await query.answer("❌ Ошибка данных", show_alert=True)
+                    return
+                acc_id = int(parts[1])
+                current = int(parts[2])
+                new_val = current + 1
+                if new_val > 23:
+                    new_val = 0
+                await set_setting(acc_id, "active_hours_end", new_val)
+                await _show_settings(acc_id, query)
+            except (ValueError, IndexError) as e:
+                logger.warning(f"[TG] set_end error: {e}")
+                await query.answer("❌ Ошибка", show_alert=True)
             return
 
         if data.startswith("set_sleep:"):
-            parts = data.split(":")
-            acc_id = int(parts[1])
-            current = int(parts[2])
-            new_val = current + 60  # +1 hour
-            if new_val > 720:
-                new_val = 60
-            await set_setting(acc_id, "outside_sleep_min", new_val)
-            await _show_settings(acc_id, query)
+            try:
+                parts = data.split(":")
+                if len(parts) < 3:
+                    await query.answer("❌ Ошибка данных", show_alert=True)
+                    return
+                acc_id = int(parts[1])
+                current = int(parts[2])
+                new_val = current + 60  # +1 hour
+                if new_val > 720:
+                    new_val = 60
+                await set_setting(acc_id, "outside_sleep_min", new_val)
+                await _show_settings(acc_id, query)
+            except (ValueError, IndexError) as e:
+                logger.warning(f"[TG] set_sleep error: {e}")
+                await query.answer("❌ Ошибка", show_alert=True)
             return
 
         if data == "acc:del_list":
@@ -1448,6 +1570,14 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
         if data.startswith("acc:keywords:"):
             await _show_keywords(int(data.split(":")[2]), query)
+            return
+
+        if data.startswith("acc:lists:"):
+            await _show_lists(int(data.split(":")[2]), query)
+            return
+
+        if data.startswith("lists:edit:"):
+            await _lists_edit_start(update, ctx)
             return
 
         logger.warning("[TG] Unknown callback: {}", data)
@@ -1608,8 +1738,18 @@ def register_handlers(app: Application) -> None:
         allow_reentry=True,
         per_message=False,
     )
+    lists_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(_lists_edit_start, pattern="^lists:edit:")],
+        states={
+            ST_SET_LISTS: [MessageHandler(filters.TEXT & ~filters.COMMAND, _lists_save)]
+        },
+        fallbacks=[CallbackQueryHandler(on_callback)],
+        allow_reentry=True,
+        per_message=False,
+    )
     app.add_handler(add_account_conv)
     app.add_handler(keywords_conv)
+    app.add_handler(lists_conv)
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("menu", cmd_menu))
     app.add_handler(CommandHandler("status", cmd_status))
