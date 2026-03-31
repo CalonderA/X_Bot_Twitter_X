@@ -147,6 +147,10 @@ async def _show_main_menu(query_or_message, edit: bool = True) -> None:
         running = (
             state.worker_manager.is_running(a["id"]) if state.worker_manager else False
         )
+        sleeping = (
+            state.worker_manager.get_is_sleeping(a["id"]) if state.worker_manager else False
+        )
+        status_icon = "💤" if sleeping else ("🟢" if running else "🔴")
         buttons.append(
             [
                 InlineKeyboardButton(
@@ -159,6 +163,18 @@ async def _show_main_menu(query_or_message, edit: bool = True) -> None:
                 ),
             ]
         )
+        # Add wake/sleep buttons for running accounts
+        if running:
+            buttons.append(
+                [
+                    InlineKeyboardButton(
+                        "🔔 Разбудить сейчас", callback_data=f"wake:{a['id']}"
+                    ),
+                    InlineKeyboardButton(
+                        "😴 Ручной сон", callback_data=f"sleep:{a['id']}:30"
+                    ),
+                ]
+            )
     buttons.append(
         [
             InlineKeyboardButton("➕ Добавить аккаунт", callback_data="acc:add"),
@@ -315,6 +331,8 @@ async def _show_settings(acc_id: int, query) -> None:
                 InlineKeyboardButton(
                     f"💤 Сон: {sleep_min}м", callback_data=f"set_sleep:{acc_id}:{sleep_min}"
                 ),
+                InlineKeyboardButton("🔔 Разбудить", callback_data=f"wake:{acc_id}"),
+                InlineKeyboardButton("😴 Сон 30м", callback_data=f"sleep:{acc_id}:30"),
             ],
             [
                 InlineKeyboardButton(
@@ -1304,6 +1322,34 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
                 f"⏹ @{acc['username']} остановлен." if ok else "⚠️ Не запущен.",
                 reply_markup=_back(),
             )
+            return
+
+        if data.startswith("wake:"):
+            acc_id = int(data.split(":")[1])
+            if state.worker_manager:
+                state.worker_manager.force_wake(acc_id)
+                acc = await get_account(acc_id)
+                await query.edit_message_text(
+                    f"🔔 @{acc['username']} разбужен!",
+                    reply_markup=_back(),
+                )
+            else:
+                await query.edit_message_text("⚠️ Менеджер не запущен.", reply_markup=_back())
+            return
+
+        if data.startswith("sleep:"):
+            parts = data.split(":")
+            acc_id = int(parts[1])
+            minutes = int(parts[2]) if len(parts) > 2 else 30
+            if state.worker_manager:
+                state.worker_manager.manual_sleep(acc_id, minutes)
+                acc = await get_account(acc_id)
+                await query.edit_message_text(
+                    f"😴 @{acc['username']} усыплён на {minutes} мин.",
+                    reply_markup=_back(),
+                )
+            else:
+                await query.edit_message_text("⚠️ Менеджер не запущен.", reply_markup=_back())
             return
 
         if data.startswith("test:"):
