@@ -1288,69 +1288,38 @@ class RateLimiter:
 
 
         if not self._is_active_hours(active_hours_start, active_hours_end):
-
-
-
-            wait_s = outside_sleep_min * 60
-
-
-
-            h, m = divmod(outside_sleep_min, 60)
-
-
-
-            label = f"{h}ч {m}м" if h else f"{m}м"
-
-
-
-            logger.info(
-
-
-
-                f"[Acc {account_id}] Outside active hours "
-
-
-
-                f"({active_hours_start}:00-{active_hours_end}:00) - sleeping {label}"
-
-
-
-            )
-
-
-
-            if wake_event is not None:
-
-
-
-                wake_event.clear()
-
-
-
-                try:
-
-
-
-                    await asyncio.wait_for(wake_event.wait(), timeout=wait_s)
-
-
-
-                    logger.info(f"[Acc {account_id}] Outside-hours sleep interrupted by force_wake")
-
-
-
-                except asyncio.TimeoutError:
-
-
-
-                    pass
-
-
-
+            # Рассчитываем реальное время до начала активных часов
+            current_hour = time.localtime().tm_hour
+            current_min = time.localtime().tm_min
+            
+            if current_hour < active_hours_start:
+                # Сейчас до начала (например, 01:00 при старте 08:00)
+                minutes_until_start = (active_hours_start - current_hour) * 60 - current_min
+            elif current_hour >= active_hours_end:
+                # Сейчас после конца (например, 23:00 при конце 23:00) - ждем до завтра
+                minutes_until_start = (24 - current_hour + active_hours_start) * 60 - current_min
             else:
-
-
-
+                # Не должно произойти, но на всякий случай
+                minutes_until_start = outside_sleep_min
+            
+            # Ограничиваем: минимум 5 минут, максимум outside_sleep_min
+            wait_minutes = max(5, min(minutes_until_start, outside_sleep_min))
+            wait_s = wait_minutes * 60
+            
+            h, m = divmod(wait_minutes, 60)
+            label = f"{h}ч {m}м" if h else f"{m}м"
+            logger.info(
+                f"[Acc {account_id}] Вне активных часов "
+                f"({active_hours_start}:00-{active_hours_end}:00) - спим {label}"
+            )
+            if wake_event is not None:
+                wake_event.clear()
+                try:
+                    await asyncio.wait_for(wake_event.wait(), timeout=wait_s)
+                    logger.info(f"[Acc {account_id}] Сон прерван вручную")
+                except asyncio.TimeoutError:
+                    pass
+            else:
                 await asyncio.sleep(wait_s)
 
 

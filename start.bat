@@ -104,6 +104,13 @@ if errorlevel 1 (
     %PYTHON% -m pip install pydantic-settings --user
 )
 
+:: Check curl_cffi (нужен для Telegram бота)
+%PYTHON% -c "import curl_cffi" >nul 2>&1
+if errorlevel 1 (
+    echo [+] Installing curl-cffi...
+    %PYTHON% -m pip install curl-cffi --user
+)
+
 echo [OK] Dependencies checked
 echo.
 
