@@ -334,6 +334,17 @@ async def _show_settings(acc_id: int, query) -> None:
             ],
             [
                 InlineKeyboardButton(
+                    f"❤️ Лайки: {min_likes}", callback_data=f"set_likes:{acc_id}:{min_likes}"
+                ),
+                InlineKeyboardButton(
+                    f"📊 Лимит: {daily_lim}", callback_data=f"set_limit:{acc_id}:{daily_lim}"
+                ),
+                InlineKeyboardButton(
+                    f"⏳ Возраст: {max_age}м", callback_data=f"set_age:{acc_id}:{max_age}"
+                ),
+            ],
+            [
+                InlineKeyboardButton(
                     f"⏱ Задержка: {min_d // 60}м", callback_data=f"set_delay:{acc_id}:{min_d}"
                 ),
                 InlineKeyboardButton(
@@ -1553,6 +1564,72 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
                 await _show_settings(acc_id, query)
             except (ValueError, IndexError) as e:
                 logger.warning(f"[TG] set_sleep error: {e}")
+                await query.answer("❌ Ошибка", show_alert=True)
+            return
+
+        if data.startswith("set_likes:"):
+            try:
+                parts = data.split(":")
+                if len(parts) < 3:
+                    await query.answer("❌ Ошибка данных", show_alert=True)
+                    return
+                acc_id = int(parts[1])
+                current = int(parts[2])
+                # Cycle: 0, 10, 25, 50, 100, 200, 500, 1000
+                likes_options = [0, 10, 25, 50, 100, 200, 500, 1000]
+                try:
+                    idx = likes_options.index(current)
+                    new_val = likes_options[(idx + 1) % len(likes_options)]
+                except ValueError:
+                    new_val = 200
+                await set_setting(acc_id, "min_likes", new_val)
+                await _show_settings(acc_id, query)
+            except (ValueError, IndexError) as e:
+                logger.warning(f"[TG] set_likes error: {e}")
+                await query.answer("❌ Ошибка", show_alert=True)
+            return
+
+        if data.startswith("set_limit:"):
+            try:
+                parts = data.split(":")
+                if len(parts) < 3:
+                    await query.answer("❌ Ошибка данных", show_alert=True)
+                    return
+                acc_id = int(parts[1])
+                current = int(parts[2])
+                # Cycle: 5, 10, 12, 15, 20, 30, 50, 100
+                limit_options = [5, 10, 12, 15, 20, 30, 50, 100]
+                try:
+                    idx = limit_options.index(current)
+                    new_val = limit_options[(idx + 1) % len(limit_options)]
+                except ValueError:
+                    new_val = 12
+                await set_setting(acc_id, "daily_limit", new_val)
+                await _show_settings(acc_id, query)
+            except (ValueError, IndexError) as e:
+                logger.warning(f"[TG] set_limit error: {e}")
+                await query.answer("❌ Ошибка", show_alert=True)
+            return
+
+        if data.startswith("set_age:"):
+            try:
+                parts = data.split(":")
+                if len(parts) < 3:
+                    await query.answer("❌ Ошибка данных", show_alert=True)
+                    return
+                acc_id = int(parts[1])
+                current = int(parts[2])
+                # Cycle: 30, 60, 120, 180, 360, 720, 1440 (1 day)
+                age_options = [30, 60, 120, 180, 360, 720, 1440]
+                try:
+                    idx = age_options.index(current)
+                    new_val = age_options[(idx + 1) % len(age_options)]
+                except ValueError:
+                    new_val = 60
+                await set_setting(acc_id, "max_age_min", new_val)
+                await _show_settings(acc_id, query)
+            except (ValueError, IndexError) as e:
+                logger.warning(f"[TG] set_age error: {e}")
                 await query.answer("❌ Ошибка", show_alert=True)
             return
 
