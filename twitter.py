@@ -979,6 +979,7 @@ class TwitterClient(TwitterAuth):
 
     async def post_reply(self, reply_text: str, in_reply_to_tweet_id: str,
                          tweet_url: Optional[str] = None) -> Optional[str]:
+        # Try browser poster first (if available)
         try:
             from browser_poster import get_browser_poster
             poster = await get_browser_poster()
@@ -992,12 +993,15 @@ class TwitterClient(TwitterAuth):
             )
             if tweet_id:
                 logger.success(f"[Acc {self.account_id}] ✅ Browser posted → {tweet_id}")
-            else:
-                logger.warning(f"[Acc {self.account_id}] Browser не смог опубликовать")
-            return tweet_id
+                return tweet_id
+            logger.debug(f"[Acc {self.account_id}] Browser не смог опубликовать, пробуем GraphQL")
+        except ModuleNotFoundError:
+            logger.debug(f"[Acc {self.account_id}] browser_poster не найден — используем GraphQL")
         except Exception as e:
-            logger.error(f"[Acc {self.account_id}] Browser post error: {e}")
-            return None
+            logger.debug(f"[Acc {self.account_id}] Browser post error: {e} — пробуем GraphQL")
+
+        # Fallback to GraphQL method
+        return await self._post_reply_graphql(reply_text, in_reply_to_tweet_id, tweet_url)
 
     # ── Like tweet (Фаза 3 — FavoriteTweet GraphQL) ───────────────────
 
